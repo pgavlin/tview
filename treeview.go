@@ -15,6 +15,34 @@ const (
 	treePageDown
 )
 
+// TreeCell represents one cell in a TreeNode's columns.
+type TreeCell struct {
+	// The text to be displayed in the tree cell.
+	Text string
+
+	// The maximum width of the cell in screen space. This is used to give a
+	// column a maximum width. Any cell text whose screen width exceeds this width
+	// is cut off. Set to 0 if there is no maximum with.
+	MaxWidth int
+
+	// The text color.
+	Color tcell.Color
+}
+
+// NewTreeCell returns a new tree cell.
+func NewTreeCell(text string) *TreeCell {
+	return &TreeCell{
+		Text:  text,
+		Color: Styles.PrimaryTextColor,
+	}
+}
+
+// SetMaxWidth sets the maximum width for this TreeCell.
+func (tc *TreeCell) SetMaxWidth(w int) *TreeCell {
+	tc.MaxWidth = w
+	return tc
+}
+
 // TreeNode represents one node in a tree view.
 type TreeNode struct {
 	// The reference object.
@@ -23,11 +51,8 @@ type TreeNode struct {
 	// This node's child nodes.
 	children []*TreeNode
 
-	// The item's text.
-	text string
-
-	// The text color.
-	color tcell.Color
+	// The item's columns.
+	columns []*TreeCell
 
 	// Whether or not this node can be selected.
 	selectable bool
@@ -51,8 +76,7 @@ type TreeNode struct {
 // NewTreeNode returns a new tree node.
 func NewTreeNode(text string) *TreeNode {
 	return &TreeNode{
-		text:       text,
-		color:      Styles.PrimaryTextColor,
+		columns:    []*TreeCell{NewTreeCell(text)},
 		indent:     2,
 		expanded:   true,
 		selectable: true,
@@ -99,6 +123,17 @@ func (n *TreeNode) GetReference() interface{} {
 	return n.reference
 }
 
+// SetColumns sets this node's columns.
+func (n *TreeNode) SetColumns(columns []*TreeCell) *TreeNode {
+	n.columns = append([]*TreeCell{n.columns[0]}, columns...)
+	return n
+}
+
+// GetColumns returns this node's columns.
+func (n *TreeNode) GetColumns() []*TreeCell {
+	return n.columns[1:]
+}
+
 // SetChildren sets this node's child nodes.
 func (n *TreeNode) SetChildren(childNodes []*TreeNode) *TreeNode {
 	n.children = childNodes
@@ -107,7 +142,7 @@ func (n *TreeNode) SetChildren(childNodes []*TreeNode) *TreeNode {
 
 // GetText returns this node's text.
 func (n *TreeNode) GetText() string {
-	return n.text
+	return n.columns[0].Text
 }
 
 // GetChildren returns this node's children.
@@ -184,18 +219,18 @@ func (n *TreeNode) IsExpanded() bool {
 
 // SetText sets the node's text which is displayed.
 func (n *TreeNode) SetText(text string) *TreeNode {
-	n.text = text
+	n.columns[0].Text = text
 	return n
 }
 
 // GetColor returns the node's color.
 func (n *TreeNode) GetColor() tcell.Color {
-	return n.color
+	return n.columns[0].Color
 }
 
 // SetColor sets the node's text color.
 func (n *TreeNode) SetColor(color tcell.Color) *TreeNode {
-	n.color = color
+	n.columns[0].Color = color
 	return n
 }
 
@@ -279,6 +314,9 @@ type TreeView struct {
 
 	// The visible nodes, top-down, as set by process().
 	nodes []*TreeNode
+
+	// The max column content widths, as set by process().
+	columns []int
 }
 
 // NewTreeView returns a new tree view.
@@ -397,7 +435,7 @@ func (t *TreeView) process() {
 
 	// Determine visible nodes and their placement.
 	var graphicsOffset, maxTextX int
-	t.nodes = nil
+	t.nodes, t.columns = nil, nil
 	selectedIndex := -1
 	topLevelGraphicsX := -1
 	if t.graphics {
@@ -447,7 +485,7 @@ func (t *TreeView) process() {
 		return node.expanded
 	})
 
-	// Post-process positions.
+	// Post-process positions and columns.
 	for _, node := range t.nodes {
 		// If text must align, we correct the positions.
 		if t.align && node.level > t.topLevel {
@@ -458,6 +496,15 @@ func (t *TreeView) process() {
 		if topLevelGraphicsX > 0 {
 			node.graphicsX -= topLevelGraphicsX
 			node.textX -= topLevelGraphicsX
+		}
+
+		if len(node.columns) > len(t.columns) {
+			t.columns = append(t.columns, make([]int, len(node.columns)-len(t.columns))...)
+		}
+		for i, c := range node.columns {
+			if c.MaxWidth > 0 && (t.columns[i] == 0 || c.MaxWidth < t.columns[i]) {
+				t.columns[i] = c.MaxWidth
+			}
 		}
 	}
 
@@ -590,6 +637,25 @@ func (t *TreeView) Draw(screen tcell.Screen) {
 		t.offsetY = 0
 	}
 
+	// Size the columns.
+	distSize := width
+	defaultSize, defaultCols := distSize/len(t.columns), 0
+	for _, w := range t.columns {
+		if w == 0 || w >= defaultSize {
+			defaultCols++
+		} else {
+			distSize -= w
+		}
+	}
+
+	defaultSize = distSize / defaultCols
+	for i, w := range t.columns {
+		if w == 0 || w >= defaultSize {
+			t.columns[i] = defaultSize
+		}
+	}
+	treeWidth := defaultSize
+
 	// Draw the tree.
 	posY := y
 	lineStyle := tcell.StyleDefault.Background(t.backgroundColor).Foreground(t.graphicsColor)
@@ -607,7 +673,7 @@ func (t *TreeView) Draw(screen tcell.Screen) {
 			// Draw ancestor branches.
 			ancestor := node.parent
 			for ancestor != nil && ancestor.parent != nil && ancestor.parent.level >= t.topLevel {
-				if ancestor.graphicsX >= width {
+				if ancestor.graphicsX >= treeWidth {
 					continue
 				}
 
@@ -623,7 +689,7 @@ func (t *TreeView) Draw(screen tcell.Screen) {
 				ancestor = ancestor.parent
 			}
 
-			if node.textX > node.graphicsX && node.graphicsX < width {
+			if node.textX > node.graphicsX && node.graphicsX < treeWidth {
 				// Connect to the node above.
 				if posY-1 >= y && t.nodes[index-1].graphicsX <= node.graphicsX && t.nodes[index-1].textX > node.graphicsX {
 					PrintJoinedSemigraphics(screen, x+node.graphicsX, posY-1, Borders.TopLeft, t.graphicsColor)
@@ -632,28 +698,44 @@ func (t *TreeView) Draw(screen tcell.Screen) {
 				// Join this node.
 				if posY < y+height {
 					screen.SetContent(x+node.graphicsX, posY, Borders.BottomLeft, nil, lineStyle)
-					for pos := node.graphicsX + 1; pos < node.textX && pos < width; pos++ {
+					for pos := node.graphicsX + 1; pos < node.textX && pos < treeWidth; pos++ {
 						screen.SetContent(x+pos, posY, Borders.Horizontal, nil, lineStyle)
 					}
 				}
 			}
 		}
 
-		// Draw the prefix and the text.
+		// Draw the columns
 		if node.textX < width && posY < y+height {
-			// Prefix.
-			var prefixWidth int
-			if len(t.prefixes) > 0 {
-				_, prefixWidth = Print(screen, t.prefixes[(node.level-t.topLevel)%len(t.prefixes)], x+node.textX, posY, width-node.textX, AlignLeft, node.color)
-			}
+			// Columns {
+			xpos := x
+			for i, c := range node.columns {
+				csize := t.columns[i]
+				cend := xpos + csize
 
-			// Text.
-			if node.textX+prefixWidth < width {
-				style := tcell.StyleDefault.Foreground(node.color)
-				if node == t.currentNode {
-					style = tcell.StyleDefault.Background(node.color).Foreground(t.backgroundColor)
+				if i < len(t.columns)-1 {
+					csize--
 				}
-				printWithStyle(screen, node.text, x+node.textX+prefixWidth, posY, width-node.textX-prefixWidth, AlignLeft, style)
+
+				// If this is the first column, draw the prefix.
+				style := tcell.StyleDefault.Foreground(c.Color)
+				if i == 0 {
+					xpos += node.textX
+					csize -= node.textX
+					if len(t.prefixes) > 0 {
+						prefix := t.prefixes[(node.level-t.topLevel)%len(t.prefixes)]
+						_, prefixWidth := Print(screen, prefix, xpos, posY, csize, AlignLeft, c.Color)
+						xpos += prefixWidth
+						csize -= prefixWidth
+					}
+					if node == t.currentNode {
+						style = tcell.StyleDefault.Background(c.Color).Foreground(t.backgroundColor)
+					}
+				}
+				if xpos < cend {
+					printWithStyle(screen, c.Text, xpos, posY, csize, AlignLeft, style)
+				}
+				xpos = cend
 			}
 		}
 

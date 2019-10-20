@@ -2,6 +2,7 @@
 package main
 
 import (
+	"fmt"
 	"io/ioutil"
 	"path/filepath"
 
@@ -17,6 +18,7 @@ func main() {
 	tree := tview.NewTreeView().
 		SetRoot(root).
 		SetCurrentNode(root)
+	tree.SetBorder(true)
 
 	// A helper function which adds the files and directories of the given path
 	// to the given target node.
@@ -26,11 +28,18 @@ func main() {
 			panic(err)
 		}
 		for _, file := range files {
+			columns := []*tview.TreeCell{
+				tview.NewTreeCell(fmt.Sprintf("%v", file.Size())).SetMaxWidth(20),
+				tview.NewTreeCell(file.ModTime().String()).SetMaxWidth(20),
+			}
+
 			node := tview.NewTreeNode(file.Name()).
 				SetReference(filepath.Join(path, file.Name())).
-				SetSelectable(file.IsDir())
+				SetSelectable(file.IsDir()).
+				SetColumns(columns)
 			if file.IsDir() {
 				node.SetColor(tcell.ColorGreen)
+				columns[0].Text = ""
 			}
 			target.AddChild(node)
 		}
