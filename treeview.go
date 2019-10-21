@@ -747,6 +747,10 @@ func (t *TreeView) Draw(screen tcell.Screen) {
 // InputHandler returns the handler for this primitive.
 func (t *TreeView) InputHandler() func(event *tcell.EventKey, setFocus func(p Primitive)) {
 	return t.WrapInputHandler(func(event *tcell.EventKey, setFocus func(p Primitive)) {
+		if t.root == nil {
+			return
+		}
+
 		selectNode := func() {
 			if t.currentNode != nil {
 				if t.selected != nil {
