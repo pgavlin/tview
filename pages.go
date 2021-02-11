@@ -1,7 +1,7 @@
 package tview
 
 import (
-	"github.com/gdamore/tcell"
+	"github.com/gdamore/tcell/v2"
 )
 
 // page represents one page of a Pages object.
@@ -20,7 +20,7 @@ type page struct {
 type Pages struct {
 	*Box
 
-	// The contained pages.
+	// The contained pages. (Visible) pages are drawn from back to front.
 	pages []*page
 
 	// We keep a reference to the function which allows us to set the focus to
@@ -37,7 +37,6 @@ func NewPages() *Pages {
 	p := &Pages{
 		Box: NewBox(),
 	}
-	p.focus = p
 	return p
 }
 
@@ -240,7 +239,7 @@ func (p *Pages) GetFrontPage() (name string, item Primitive) {
 // HasFocus returns whether or not this primitive has focus.
 func (p *Pages) HasFocus() bool {
 	for _, page := range p.pages {
-		if page.Item.GetFocusable().HasFocus() {
+		if page.Item.HasFocus() {
 			return true
 		}
 	}
@@ -266,7 +265,7 @@ func (p *Pages) Focus(delegate func(p Primitive)) {
 
 // Draw draws this primitive onto the screen.
 func (p *Pages) Draw(screen tcell.Screen) {
-	p.Box.Draw(screen)
+	p.Box.DrawForSubclass(screen, p)
 	for _, page := range p.pages {
 		if !page.Visible {
 			continue
@@ -277,4 +276,40 @@ func (p *Pages) Draw(screen tcell.Screen) {
 		}
 		page.Item.Draw(screen)
 	}
+}
+
+// MouseHandler returns the mouse handler for this primitive.
+func (p *Pages) MouseHandler() func(action MouseAction, event *tcell.EventMouse, setFocus func(p Primitive)) (consumed bool, capture Primitive) {
+	return p.WrapMouseHandler(func(action MouseAction, event *tcell.EventMouse, setFocus func(p Primitive)) (consumed bool, capture Primitive) {
+		if !p.InRect(event.Position()) {
+			return false, nil
+		}
+
+		// Pass mouse events along to the last visible page item that takes it.
+		for index := len(p.pages) - 1; index >= 0; index-- {
+			page := p.pages[index]
+			if page.Visible {
+				consumed, capture = page.Item.MouseHandler()(action, event, setFocus)
+				if consumed {
+					return
+				}
+			}
+		}
+
+		return
+	})
+}
+
+// InputHandler returns the handler for this primitive.
+func (p *Pages) InputHandler() func(event *tcell.EventKey, setFocus func(p Primitive)) {
+	return p.WrapInputHandler(func(event *tcell.EventKey, setFocus func(p Primitive)) {
+		for _, page := range p.pages {
+			if page.Item.HasFocus() {
+				if handler := page.Item.InputHandler(); handler != nil {
+					handler(event, setFocus)
+					return
+				}
+			}
+		}
+	})
 }

@@ -1,7 +1,7 @@
 package tview
 
 import (
-	"github.com/gdamore/tcell"
+	"github.com/gdamore/tcell/v2"
 )
 
 // Configuration values.
@@ -53,7 +53,6 @@ func NewFlex() *Flex {
 		Box:       NewBox().SetBackgroundColor(tcell.ColorDefault),
 		direction: FlexColumn,
 	}
-	f.focus = f
 	return f
 }
 
@@ -101,6 +100,12 @@ func (f *Flex) RemoveItem(p Primitive) *Flex {
 	return f
 }
 
+// Clear removes all items from the container.
+func (f *Flex) Clear() *Flex {
+	f.items = nil
+	return f
+}
+
 // ResizeItem sets a new size for the item(s) with the given primitive. If there
 // are multiple Flex items with the same primitive, they will all receive the
 // same size. For details regarding the size parameters, see AddItem().
@@ -116,7 +121,7 @@ func (f *Flex) ResizeItem(p Primitive, fixedSize, proportion int) *Flex {
 
 // Draw draws this primitive onto the screen.
 func (f *Flex) Draw(screen tcell.Screen) {
-	f.Box.Draw(screen)
+	f.Box.DrawForSubclass(screen, f)
 
 	// Calculate size and position of the items.
 
@@ -167,7 +172,7 @@ func (f *Flex) Draw(screen tcell.Screen) {
 		pos += size
 
 		if item.Item != nil {
-			if item.Item.GetFocusable().HasFocus() {
+			if item.Item.HasFocus() {
 				defer item.Item.Draw(screen)
 			} else {
 				item.Item.Draw(screen)
@@ -189,9 +194,45 @@ func (f *Flex) Focus(delegate func(p Primitive)) {
 // HasFocus returns whether or not this primitive has focus.
 func (f *Flex) HasFocus() bool {
 	for _, item := range f.items {
-		if item.Item != nil && item.Item.GetFocusable().HasFocus() {
+		if item.Item != nil && item.Item.HasFocus() {
 			return true
 		}
 	}
 	return false
+}
+
+// MouseHandler returns the mouse handler for this primitive.
+func (f *Flex) MouseHandler() func(action MouseAction, event *tcell.EventMouse, setFocus func(p Primitive)) (consumed bool, capture Primitive) {
+	return f.WrapMouseHandler(func(action MouseAction, event *tcell.EventMouse, setFocus func(p Primitive)) (consumed bool, capture Primitive) {
+		if !f.InRect(event.Position()) {
+			return false, nil
+		}
+
+		// Pass mouse events along to the first child item that takes it.
+		for _, item := range f.items {
+			if item.Item == nil {
+				continue
+			}
+			consumed, capture = item.Item.MouseHandler()(action, event, setFocus)
+			if consumed {
+				return
+			}
+		}
+
+		return
+	})
+}
+
+// InputHandler returns the handler for this primitive.
+func (f *Flex) InputHandler() func(event *tcell.EventKey, setFocus func(p Primitive)) {
+	return f.WrapInputHandler(func(event *tcell.EventKey, setFocus func(p Primitive)) {
+		for _, item := range f.items {
+			if item.Item != nil && item.Item.HasFocus() {
+				if handler := item.Item.InputHandler(); handler != nil {
+					handler(event, setFocus)
+					return
+				}
+			}
+		}
+	})
 }

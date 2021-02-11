@@ -7,7 +7,7 @@ import (
 	"sync"
 	"unicode/utf8"
 
-	"github.com/gdamore/tcell"
+	"github.com/gdamore/tcell/v2"
 )
 
 // InputField is a one-line box (three lines if there is a title) where the
@@ -69,9 +69,6 @@ type InputField struct {
 	// The cursor position as a byte index into the text string.
 	cursorPos int
 
-	// The number of bytes of the text string skipped ahead while drawing.
-	offset int
-
 	// An optional autocomplete function which receives the current text of the
 	// input field and returns a slice of strings to be displayed in a drop-down
 	// selection.
@@ -96,6 +93,9 @@ type InputField struct {
 	// A callback function set by the Form class and called when the user leaves
 	// this form item.
 	finished func(tcell.Key)
+
+	fieldX int // The x-coordinate of the input field as determined during the last call to Draw().
+	offset int // The number of bytes of the text string skipped ahead while drawing.
 }
 
 // NewInputField returns a new input field.
@@ -249,11 +249,13 @@ func (i *InputField) Autocomplete() *InputField {
 
 	// Fill it with the entries.
 	currentEntry := -1
+	suffixLength := 9999 // I'm just waiting for the day somebody opens an issue with this number being too small.
 	i.autocompleteList.Clear()
 	for index, entry := range entries {
 		i.autocompleteList.AddItem(entry, "", 0, nil)
-		if currentEntry < 0 && entry == i.text {
+		if strings.HasPrefix(entry, i.text) && len(entry)-len(i.text) < suffixLength {
 			currentEntry = index
+			suffixLength = len(i.text) - len(entry)
 		}
 	}
 
@@ -303,7 +305,7 @@ func (i *InputField) SetFinishedFunc(handler func(key tcell.Key)) FormItem {
 
 // Draw draws this primitive onto the screen.
 func (i *InputField) Draw(screen tcell.Screen) {
-	i.Box.Draw(screen)
+	i.Box.DrawForSubclass(screen, i)
 
 	// Prepare
 	x, y, width, height := i.GetInnerRect()
@@ -326,6 +328,7 @@ func (i *InputField) Draw(screen tcell.Screen) {
 	}
 
 	// Draw input area.
+	i.fieldX = x
 	fieldWidth := i.fieldWidth
 	if fieldWidth == 0 {
 		fieldWidth = math.MaxInt32
@@ -427,7 +430,7 @@ func (i *InputField) Draw(screen tcell.Screen) {
 	}
 
 	// Set cursor.
-	if i.focus.HasFocus() {
+	if i.HasFocus() {
 		screen.ShowCursor(x+cursorScreenPos, y)
 	}
 }
@@ -478,6 +481,21 @@ func (i *InputField) InputHandler() func(event *tcell.EventKey, setFocus func(p 
 			i.text = newText
 			i.cursorPos += len(string(r))
 			return true
+		}
+
+		// Change the autocomplete selection.
+		autocompleteSelect := func(offset int) {
+			count := i.autocompleteList.GetItemCount()
+			newEntry := i.autocompleteList.GetCurrentItem() + offset
+			if newEntry >= count {
+				newEntry = 0
+			} else if newEntry < 0 {
+				newEntry = count - 1
+			}
+			i.autocompleteList.SetCurrentItem(newEntry)
+			currentText, _ = i.autocompleteList.GetItemText(newEntry) // Don't trigger changed function twice.
+			currentText = stripTags(currentText)
+			i.SetText(currentText)
 		}
 
 		// Finish up.
@@ -557,37 +575,68 @@ func (i *InputField) InputHandler() func(event *tcell.EventKey, setFocus func(p 
 			home()
 		case tcell.KeyEnd, tcell.KeyCtrlE:
 			end()
-		case tcell.KeyEnter, tcell.KeyEscape: // We might be done.
+		case tcell.KeyEnter:
+			if i.autocompleteList != nil {
+				autocompleteSelect(0)
+				i.autocompleteList = nil
+			} else {
+				finish(key)
+			}
+		case tcell.KeyEscape:
 			if i.autocompleteList != nil {
 				i.autocompleteList = nil
 			} else {
 				finish(key)
 			}
-		case tcell.KeyDown, tcell.KeyTab: // Autocomplete selection.
+		case tcell.KeyTab:
 			if i.autocompleteList != nil {
-				count := i.autocompleteList.GetItemCount()
-				newEntry := i.autocompleteList.GetCurrentItem() + 1
-				if newEntry >= count {
-					newEntry = 0
-				}
-				i.autocompleteList.SetCurrentItem(newEntry)
-				currentText, _ = i.autocompleteList.GetItemText(newEntry) // Don't trigger changed function twice.
-				i.SetText(currentText)
+				autocompleteSelect(0)
+			} else {
+				finish(key)
+			}
+		case tcell.KeyDown:
+			if i.autocompleteList != nil {
+				autocompleteSelect(1)
 			} else {
 				finish(key)
 			}
 		case tcell.KeyUp, tcell.KeyBacktab: // Autocomplete selection.
 			if i.autocompleteList != nil {
-				newEntry := i.autocompleteList.GetCurrentItem() - 1
-				if newEntry < 0 {
-					newEntry = i.autocompleteList.GetItemCount() - 1
-				}
-				i.autocompleteList.SetCurrentItem(newEntry)
-				currentText, _ = i.autocompleteList.GetItemText(newEntry) // Don't trigger changed function twice.
-				i.SetText(currentText)
+				autocompleteSelect(-1)
 			} else {
 				finish(key)
 			}
 		}
+	})
+}
+
+// MouseHandler returns the mouse handler for this primitive.
+func (i *InputField) MouseHandler() func(action MouseAction, event *tcell.EventMouse, setFocus func(p Primitive)) (consumed bool, capture Primitive) {
+	return i.WrapMouseHandler(func(action MouseAction, event *tcell.EventMouse, setFocus func(p Primitive)) (consumed bool, capture Primitive) {
+		x, y := event.Position()
+		_, rectY, _, _ := i.GetInnerRect()
+		if !i.InRect(x, y) {
+			return false, nil
+		}
+
+		// Process mouse event.
+		if action == MouseLeftClick && y == rectY {
+			// Determine where to place the cursor.
+			if x >= i.fieldX {
+				if !iterateString(i.text[i.offset:], func(main rune, comb []rune, textPos int, textWidth int, screenPos int, screenWidth int) bool {
+					if x-i.fieldX < screenPos+screenWidth {
+						i.cursorPos = textPos + i.offset
+						return true
+					}
+					return false
+				}) {
+					i.cursorPos = len(i.text)
+				}
+			}
+			setFocus(i)
+			consumed = true
+		}
+
+		return
 	})
 }

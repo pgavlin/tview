@@ -6,7 +6,7 @@ import (
 	"sort"
 	"strconv"
 
-	"github.com/gdamore/tcell"
+	"github.com/gdamore/tcell/v2"
 	runewidth "github.com/mattn/go-runewidth"
 	"github.com/rivo/uniseg"
 )
@@ -52,9 +52,6 @@ var (
 
 // Package initialization.
 func init() {
-	// We'll use zero width joiners.
-	runewidth.ZeroWidthJoiner = true
-
 	// Initialize the predefined input field handlers.
 	InputFieldInteger = func(text string, ch rune) bool {
 		if text == "-" {
@@ -124,7 +121,11 @@ func overlayStyle(background tcell.Color, defaultStyle tcell.Style, fgColor, bgC
 
 	style = style.Foreground(defFg)
 	if fgColor != "" {
-		style = style.Foreground(tcell.GetColor(fgColor))
+		if fgColor == "-" {
+			style = style.Foreground(defFg)
+		} else {
+			style = style.Foreground(tcell.GetColor(fgColor))
+		}
 	}
 
 	if bgColor == "-" || bgColor == "" && defBg != tcell.ColorDefault {
@@ -194,32 +195,31 @@ func decomposeString(text string, findColors, findRegions bool) (colorIndices []
 	}
 
 	// Make a (sorted) list of all tags.
-	var allIndices [][]int
-	if findColors && findRegions {
-		allIndices = colorIndices
-		allIndices = make([][]int, len(colorIndices)+len(regionIndices))
-		copy(allIndices, colorIndices)
-		copy(allIndices[len(colorIndices):], regionIndices)
-		sort.Slice(allIndices, func(i int, j int) bool {
-			return allIndices[i][0] < allIndices[j][0]
-		})
-	} else if findColors {
-		allIndices = colorIndices
-	} else {
-		allIndices = regionIndices
+	allIndices := make([][3]int, 0, len(colorIndices)+len(regionIndices)+len(escapeIndices))
+	for indexType, index := range [][][]int{colorIndices, regionIndices, escapeIndices} {
+		for _, tag := range index {
+			allIndices = append(allIndices, [3]int{tag[0], tag[1], indexType})
+		}
 	}
+	sort.Slice(allIndices, func(i int, j int) bool {
+		return allIndices[i][0] < allIndices[j][0]
+	})
 
 	// Remove the tags from the original string.
 	var from int
 	buf := make([]byte, 0, len(text))
 	for _, indices := range allIndices {
-		buf = append(buf, []byte(text[from:indices[0]])...)
-		from = indices[1]
+		if indices[2] == 2 { // Escape sequences are not simply removed.
+			buf = append(buf, []byte(text[from:indices[1]-2])...)
+			buf = append(buf, ']')
+			from = indices[1]
+		} else {
+			buf = append(buf, []byte(text[from:indices[0]])...)
+			from = indices[1]
+		}
 	}
 	buf = append(buf, text[from:]...)
-
-	// Escape string.
-	stripped = string(escapePattern.ReplaceAll(buf, []byte("[$1$2]")))
+	stripped = string(buf)
 
 	// Get the width of the stripped string.
 	width = stringWidth(stripped)
@@ -243,7 +243,8 @@ func Print(screen tcell.Screen, text string, x, y, maxWidth, align int, color tc
 // printWithStyle works like Print() but it takes a style instead of just a
 // foreground color.
 func printWithStyle(screen tcell.Screen, text string, x, y, maxWidth, align int, style tcell.Style) (int, int) {
-	if maxWidth <= 0 || len(text) == 0 {
+	totalWidth, totalHeight := screen.Size()
+	if maxWidth <= 0 || len(text) == 0 || y < 0 || y >= totalHeight {
 		return 0, 0
 	}
 
@@ -361,7 +362,7 @@ func printWithStyle(screen tcell.Screen, text string, x, y, maxWidth, align int,
 	)
 	iterateString(strippedText, func(main rune, comb []rune, textPos, length, screenPos, screenWidth int) bool {
 		// Only continue if there is still space.
-		if drawnWidth+screenWidth > maxWidth {
+		if drawnWidth+screenWidth > maxWidth || x+drawnWidth >= totalWidth {
 			return true
 		}
 
@@ -623,4 +624,16 @@ func iterateStringReverse(text string, callback func(main rune, comb []rune, tex
 	}
 
 	return false
+}
+
+// stripTags strips colour tags from the given string. (Region tags are not
+// stripped.)
+func stripTags(text string) string {
+	stripped := colorPattern.ReplaceAllStringFunc(text, func(match string) string {
+		if len(match) > 2 {
+			return ""
+		}
+		return match
+	})
+	return escapePattern.ReplaceAllString(stripped, `[$1$2]`)
 }

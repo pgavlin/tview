@@ -2,7 +2,7 @@
 package main
 
 import (
-	"github.com/gdamore/tcell"
+	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 )
 
@@ -16,7 +16,7 @@ func main() {
 		AddText("Header second middle", true, tview.AlignCenter, tcell.ColorRed).
 		AddText("Footer middle", false, tview.AlignCenter, tcell.ColorGreen).
 		AddText("Footer second middle", false, tview.AlignCenter, tcell.ColorGreen)
-	if err := app.SetRoot(frame, true).Run(); err != nil {
+	if err := app.SetRoot(frame, true).EnableMouse(true).Run(); err != nil {
 		panic(err)
 	}
 }

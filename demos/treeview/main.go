@@ -6,7 +6,7 @@ import (
 	"io/ioutil"
 	"path/filepath"
 
-	"github.com/gdamore/tcell"
+	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 )
 
@@ -65,7 +65,7 @@ func main() {
 		}
 	})
 
-	if err := tview.NewApplication().SetRoot(tree, true).Run(); err != nil {
+	if err := tview.NewApplication().SetRoot(tree, true).EnableMouse(true).Run(); err != nil {
 		panic(err)
 	}
 }

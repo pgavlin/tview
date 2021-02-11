@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gdamore/tcell"
+	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 )
 
@@ -63,7 +63,7 @@ func main() {
 		}
 	})
 	textView.SetBorder(true)
-	if err := app.SetRoot(textView, true).Run(); err != nil {
+	if err := app.SetRoot(textView, true).EnableMouse(true).Run(); err != nil {
 		panic(err)
 	}
 }

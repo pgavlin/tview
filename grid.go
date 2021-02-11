@@ -3,7 +3,7 @@ package tview
 import (
 	"math"
 
-	"github.com/gdamore/tcell"
+	"github.com/gdamore/tcell/v2"
 )
 
 // gridItem represents one primitive and its possible position on a grid.
@@ -68,10 +68,9 @@ type Grid struct {
 //   grid.SetBackgroundColor(tview.Styles.PrimitiveBackgroundColor)
 func NewGrid() *Grid {
 	g := &Grid{
-		Box:          NewBox(),
+		Box:          NewBox().SetBackgroundColor(tcell.ColorDefault),
 		bordersColor: Styles.GraphicsColor,
 	}
-	g.focus = g
 	return g
 }
 
@@ -261,7 +260,7 @@ func (g *Grid) Blur() {
 // HasFocus returns whether or not this primitive has focus.
 func (g *Grid) HasFocus() bool {
 	for _, item := range g.items {
-		if item.visible && item.Item.GetFocusable().HasFocus() {
+		if item.visible && item.Item.HasFocus() {
 			return true
 		}
 	}
@@ -271,6 +270,20 @@ func (g *Grid) HasFocus() bool {
 // InputHandler returns the handler for this primitive.
 func (g *Grid) InputHandler() func(event *tcell.EventKey, setFocus func(p Primitive)) {
 	return g.WrapInputHandler(func(event *tcell.EventKey, setFocus func(p Primitive)) {
+		if !g.hasFocus {
+			// Pass event on to child primitive.
+			for _, item := range g.items {
+				if item != nil && item.Item.HasFocus() {
+					if handler := item.Item.InputHandler(); handler != nil {
+						handler(event, setFocus)
+						return
+					}
+				}
+			}
+			return
+		}
+
+		// Process our own key events if we have direct focus.
 		switch event.Key() {
 		case tcell.KeyRune:
 			switch event.Rune() {
@@ -305,7 +318,7 @@ func (g *Grid) InputHandler() func(event *tcell.EventKey, setFocus func(p Primit
 
 // Draw draws this primitive onto the screen.
 func (g *Grid) Draw(screen tcell.Screen) {
-	g.Box.Draw(screen)
+	g.Box.DrawForSubclass(screen, g)
 	x, y, width, height := g.GetInnerRect()
 	screenWidth, screenHeight := screen.Size()
 
@@ -483,7 +496,7 @@ func (g *Grid) Draw(screen tcell.Screen) {
 		}
 		item.x, item.y, item.w, item.h = px, py, pw, ph
 		item.visible = true
-		if primitive.GetFocusable().HasFocus() {
+		if primitive.HasFocus() {
 			focus = item
 		}
 	}
@@ -659,4 +672,26 @@ func (g *Grid) Draw(screen tcell.Screen) {
 			}
 		}
 	}
+}
+
+// MouseHandler returns the mouse handler for this primitive.
+func (g *Grid) MouseHandler() func(action MouseAction, event *tcell.EventMouse, setFocus func(p Primitive)) (consumed bool, capture Primitive) {
+	return g.WrapMouseHandler(func(action MouseAction, event *tcell.EventMouse, setFocus func(p Primitive)) (consumed bool, capture Primitive) {
+		if !g.InRect(event.Position()) {
+			return false, nil
+		}
+
+		// Pass mouse events along to the first child item that takes it.
+		for _, item := range g.items {
+			if item.Item == nil {
+				continue
+			}
+			consumed, capture = item.Item.MouseHandler()(action, event, setFocus)
+			if consumed {
+				return
+			}
+		}
+
+		return
+	})
 }
